@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
 
+from app.config.settings import settings
 from app.routers import auth, condominio, morador, ocorrencia, rivalidade, ws
 from app.services.ws_manager import manager
 
@@ -21,7 +22,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.CORS_ORIGINS.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
