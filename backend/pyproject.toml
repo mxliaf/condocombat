@@ -41,3 +41,8 @@ dev = [
 where = ["."]
 include = ["app*"]
 exclude = ["alembic*"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
