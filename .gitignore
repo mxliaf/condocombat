@@ -48,6 +48,7 @@ backend/build/
 .vscode/
 *.swp
 *.swo
+.env
 *~
 
 # OS
