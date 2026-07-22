@@ -7,6 +7,7 @@ skills-lock.json
 .tmp
 .omo
 AGENTS.md
+.env
 
 # Node / General
 node_modules/
