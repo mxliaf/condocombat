@@ -1,0 +1,144 @@
+name: "\U0001F680 Continuous Deployment (CD) — Terraform"
+
+on:
+  workflow_run:
+    workflows: ["Deploy Landing Page"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Pré-check: garantir que TODOS os CIs passaram antes de provisionar
+  # ---------------------------------------------------------------------------
+  check-ci:
+    name: ✅ Verificar CIs
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      should_deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - name: Verificar status dos workflows de CI
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflows = ['backend.yml', 'frontend.yml'];
+            let allPassed = true;
+
+            for (const wf of workflows) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: wf,
+                branch: 'main',
+                status: 'completed',
+                per_page: 1,
+              });
+
+              if (runs.data.workflow_runs.length === 0 || runs.data.workflow_runs[0].conclusion !== 'success') {
+                core.warning(`Workflow "${wf}" não passou. Deploy cancelado.`);
+                allPassed = false;
+                break;
+              }
+            }
+
+            core.setOutput('deploy', allPassed ? 'true' : 'false');
+
+  # ---------------------------------------------------------------------------
+  # Deploy via Terraform
+  # ---------------------------------------------------------------------------
+  terraform-deploy:
+    name: "\U0001F3D7️ Provisionar e Fazer Deploy da Infraestrutura"
+    needs: check-ci
+    if: ${{ needs.check-ci.outputs.should_deploy == 'true' }}
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    env:
+      TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+    steps:
+      - name: 📥 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 📦 Build da Landing Page
+        working-directory: ./landing
+        run: |
+          npm ci
+          npm run build
+
+      - name: 📦 Instalar Netlify CLI
+        working-directory: .
+        run: npm install -g netlify-cli
+
+      - name: ⚙️ Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # Cache dos providers para evitar timeout no download do GitHub Releases
+      - name: 📂 Criar diretório de cache
+        run: mkdir -p ~/.terraform.d/plugin-cache
+
+      - name: 🗄️ Cache dos Terraform Providers
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: terraform-providers-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+          restore-keys: |
+            terraform-providers-
+
+      # Retry no init — o download dos providers do GitHub Releases
+      # pode dar timeout/503 esporadicamente
+      - name: 🔍 Terraform Init
+        run: |
+          for i in 1 2 3; do
+            echo "=== Tentativa $i de terraform init ==="
+            terraform init -input=false && break
+            echo "Falhou. Aguardando 15s antes de tentar novamente..."
+            sleep 15
+          done
+          # Validar que o init funcionou
+          terraform version
+          terraform providers
+
+      - name: ✅ Terraform Validate
+        run: terraform validate
+
+      - name: 📋 Terraform Plan
+        run: terraform plan -out=tfplan
+        env:
+          TF_VAR_dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+          TF_VAR_supabase_access_token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          TF_VAR_supabase_db_password: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          TF_VAR_render_api_key: ${{ secrets.RENDER_API_KEY }}
+          TF_VAR_render_owner_id: ${{ secrets.RENDER_OWNER_ID }}
+          TF_VAR_backend_secret_key: ${{ secrets.BACKEND_SECRET_KEY }}
+          TF_VAR_netlify_api_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          TF_VAR_netlify_site_name: ${{ secrets.NETLIFY_SITE_NAME }}
+          TF_VAR_netlify_team_slug: ${{ secrets.NETLIFY_TEAM_SLUG }}
+
+      - name: 🚀 Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        env:
+          TF_VAR_dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+          TF_VAR_supabase_access_token: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          TF_VAR_supabase_db_password: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          TF_VAR_render_api_key: ${{ secrets.RENDER_API_KEY }}
+          TF_VAR_render_owner_id: ${{ secrets.RENDER_OWNER_ID }}
+          TF_VAR_backend_secret_key: ${{ secrets.BACKEND_SECRET_KEY }}
+          TF_VAR_netlify_api_token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          TF_VAR_netlify_site_name: ${{ secrets.NETLIFY_SITE_NAME }}
+          TF_VAR_netlify_team_slug: ${{ secrets.NETLIFY_TEAM_SLUG }}
